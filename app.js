@@ -1,0 +1,684 @@
+/* TTMSqz+SMC 紙上交易儀表板。
+   圖表全部手刻 SVG，沒有外部相依 —— PWA 離線時也要能畫。 */
+'use strict';
+
+const $ = (s, r = document) => r.querySelector(s);
+const el = (t, c) => { const n = document.createElement(t); if (c) n.className = c; return n; };
+const NBSP = ' ';
+
+const fmt = {
+  n: (v, d = 2) => v == null || !isFinite(v) ? '—' :
+      (v < 0 ? '\u2212' : '') + Math.abs(v).toLocaleString('en-US',
+      { minimumFractionDigits: d, maximumFractionDigits: d }),
+  sign: (v, d = 2) => v == null || !isFinite(v) ? '—' :
+      (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toFixed(d),
+  pct: (v, d = 1) => v == null || !isFinite(v) ? '—' : (v * 100).toFixed(d) + '%',
+  px: (v) => v == null ? '—' : (Math.abs(v) >= 1000 ? v.toFixed(1)
+      : Math.abs(v) >= 1 ? v.toFixed(3) : v.toPrecision(5)),
+  time: (iso) => { const d = new Date(iso); return isNaN(d) ? '—' :
+      d.toLocaleString('zh-TW', { month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', hour12: false }); },
+  ago: (iso) => {
+    const s = (Date.now() - new Date(iso).getTime()) / 1000;
+    if (!isFinite(s)) return '—';
+    if (s < 90) return '剛剛';
+    if (s < 5400) return Math.round(s / 60) + ' 分鐘前';
+    if (s < 172800) return Math.round(s / 3600) + ' 小時前';
+    return Math.round(s / 86400) + ' 天前';
+  },
+};
+// 顏色永遠搭配正負號與 ▲▼，不單獨承載訊息
+const cls = (v) => v > 0 ? 'pos' : v < 0 ? 'neg' : '';
+const arrow = (v) => v > 0 ? '▲' : v < 0 ? '▼' : '–';
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+/* ------------------------------------------------------------------ */
+/* 線圖：權益曲線 / 累積 R                                              */
+/* ------------------------------------------------------------------ */
+function lineChart(host, points, valueIdx, label, formatter) {
+  host.innerHTML = '';
+  if (!points || points.length < 2) {
+    host.innerHTML = '<div class="empty">資料還不夠畫圖</div>';
+    return;
+  }
+  const W = 640, H = 200, P = { t: 12, r: 10, b: 22, l: 46 };
+  const xs = points.map(p => p[0]);
+  const ys = points.map(p => p[valueIdx]);
+  const x0 = xs[0], x1 = xs[xs.length - 1];
+  let lo = Math.min(...ys), hi = Math.max(...ys);
+  if (lo === hi) { lo -= 1; hi += 1; }
+  const pad = (hi - lo) * 0.12; lo -= pad; hi += pad;
+  const X = t => P.l + (t - x0) / Math.max(1, x1 - x0) * (W - P.l - P.r);
+  const Y = v => P.t + (hi - v) / (hi - lo) * (H - P.t - P.b);
+
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('class', 'chart');
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', label + '走勢圖');
+  const mk = (t, a) => { const n = document.createElementNS(ns, t);
+    for (const k in a) n.setAttribute(k, a[k]); return n; };
+
+  // 格線 + y 軸刻度（4 條，recessive）
+  const ticks = 4;
+  for (let i = 0; i <= ticks; i++) {
+    const v = lo + (hi - lo) * i / ticks, y = Y(v);
+    svg.appendChild(mk('line', { x1: P.l, x2: W - P.r, y1: y, y2: y,
+      stroke: css('--grid'), 'stroke-width': 1 }));
+    const tx = mk('text', { x: P.l - 7, y: y + 3.5, 'text-anchor': 'end',
+      fill: css('--muted'), 'font-size': 10.5, 'font-variant-numeric': 'tabular-nums' });
+    tx.textContent = formatter(v);
+    svg.appendChild(tx);
+  }
+  // 起始水平線（淨值 = 初始資金 / 累積 R = 0）
+  const base = valueIdx === 1 ? ys[0] : 0;
+  if (base >= lo && base <= hi) {
+    svg.appendChild(mk('line', { x1: P.l, x2: W - P.r, y1: Y(base), y2: Y(base),
+      stroke: css('--axis'), 'stroke-width': 1, 'stroke-dasharray': '3 3' }));
+  }
+
+  const d = points.map((p, i) => (i ? 'L' : 'M') + X(p[0]).toFixed(2) + ' ' + Y(p[valueIdx]).toFixed(2)).join(' ');
+  svg.appendChild(mk('path', {
+    d: `${d} L ${X(x1).toFixed(2)} ${Y(lo).toFixed(2)} L ${X(x0).toFixed(2)} ${Y(lo).toFixed(2)} Z`,
+    fill: css('--series-soft'), stroke: 'none' }));
+  svg.appendChild(mk('path', { d, fill: 'none', stroke: css('--series'),
+    'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
+
+  // x 軸兩端日期
+  [[x0, 'start', P.l], [x1, 'end', W - P.r]].forEach(([t, anchor, x]) => {
+    const n = mk('text', { x, y: H - 6, 'text-anchor': anchor, fill: css('--muted'), 'font-size': 10.5 });
+    n.textContent = new Date(t).toLocaleDateString('zh-TW', { month: 'numeric', day: 'numeric' });
+    svg.appendChild(n);
+  });
+
+  // 最後一點直接標註（單一序列不需要圖例）
+  const lx = X(x1), ly = Y(ys[ys.length - 1]);
+  svg.appendChild(mk('circle', { cx: lx, cy: ly, r: 4.5, fill: css('--series'),
+    stroke: css('--surface'), 'stroke-width': 2 }));
+
+  // 十字線 + tooltip
+  const cross = mk('line', { y1: P.t, y2: H - P.b, stroke: css('--axis'),
+    'stroke-width': 1, opacity: 0 });
+  const focus = mk('circle', { r: 4, fill: css('--series'), stroke: css('--surface'),
+    'stroke-width': 2, opacity: 0 });
+  svg.appendChild(cross); svg.appendChild(focus);
+  host.appendChild(svg);
+  const tip = el('div', 'tip'); host.appendChild(tip);
+
+  const move = (ev) => {
+    const r = svg.getBoundingClientRect();
+    const cx = (ev.touches ? ev.touches[0].clientX : ev.clientX) - r.left;
+    const t = x0 + (cx / r.width * W - P.l) / (W - P.l - P.r) * (x1 - x0);
+    let best = 0, bd = Infinity;
+    for (let i = 0; i < xs.length; i++) { const dd = Math.abs(xs[i] - t); if (dd < bd) { bd = dd; best = i; } }
+    const px = X(xs[best]), py = Y(ys[best]);
+    cross.setAttribute('x1', px); cross.setAttribute('x2', px); cross.setAttribute('opacity', 1);
+    focus.setAttribute('cx', px); focus.setAttribute('cy', py); focus.setAttribute('opacity', 1);
+    tip.innerHTML = `<b>${formatter(ys[best])}</b><br>${fmt.time(new Date(xs[best]).toISOString())}`;
+    tip.classList.add('on');
+    const left = Math.min(Math.max(px / W * r.width - tip.offsetWidth / 2, 2), r.width - tip.offsetWidth - 2);
+    tip.style.left = left + 'px';
+    tip.style.top = Math.max(0, py / H * r.height - tip.offsetHeight - 10) + 'px';
+  };
+  const leave = () => { cross.setAttribute('opacity', 0); focus.setAttribute('opacity', 0); tip.classList.remove('on'); };
+  svg.addEventListener('pointermove', move);
+  svg.addEventListener('pointerleave', leave);
+  svg.addEventListener('touchmove', move, { passive: true });
+  svg.addEventListener('touchend', leave);
+}
+
+/* ------------------------------------------------------------------ */
+/* 分向長條圖：每幣總 R。0 線可見，方向本身表達正負                      */
+/* ------------------------------------------------------------------ */
+function divergingBars(host, rows) {
+  host.innerHTML = '';
+  if (!rows || !rows.length) { host.innerHTML = '<div class="empty">還沒有交易</div>'; return; }
+  const ns = 'http://www.w3.org/2000/svg';
+  const rowH = 28, W = 640, P = { t: 6, r: 6, b: 6, l: 96 };
+  const H = P.t + rows.length * rowH + P.b;
+  const max = Math.max(1e-9, ...rows.map(r => Math.abs(r.total_r)));
+  // 0 線放在繪圖區正中間，兩側各留 LABEL 給直接標註用
+  const LABEL = 52;
+  const mid = (P.l + (W - P.r)) / 2;
+  const half = (W - P.r - P.l) / 2 - LABEL;
+  const scale = v => v / max * half;
+
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('class', 'chart');
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', '每個幣種的累積 R');
+  const mk = (t, a) => { const n = document.createElementNS(ns, t);
+    for (const k in a) n.setAttribute(k, a[k]); return n; };
+
+  svg.appendChild(mk('line', { x1: mid, x2: mid, y1: P.t, y2: H - P.b,
+    stroke: css('--axis'), 'stroke-width': 1 }));
+
+  rows.forEach((r, i) => {
+    const y = P.t + i * rowH, w = scale(r.total_r), pos = r.total_r >= 0;
+    const bw = Math.max(2, Math.abs(w));
+    svg.appendChild(mk('rect', {
+      x: pos ? mid + 1 : mid - bw - 1, y: y + 7, width: bw, height: rowH - 15,
+      rx: 4, fill: pos ? css('--good') : css('--bad') }));
+
+    const name = mk('text', { x: 0, y: y + rowH / 2 + 4, fill: css('--ink-2'),
+      'font-size': 12.5 });
+    name.textContent = r.symbol.replace('USDT', '');
+    svg.appendChild(name);
+
+    const cnt = mk('text', { x: P.l - 10, y: y + rowH / 2 + 4, 'text-anchor': 'end',
+      fill: css('--muted'), 'font-size': 11 });
+    cnt.textContent = r.n + ' 筆';
+    svg.appendChild(cnt);
+
+    // 直接標值：色盲情境下正負由這個數字與 0 線的方向承載，不靠顏色
+    const lab = mk('text', { x: pos ? mid + bw + 7 : mid - bw - 7,
+      y: y + rowH / 2 + 4, 'text-anchor': pos ? 'start' : 'end',
+      fill: css('--ink'), 'font-size': 11.5, 'font-variant-numeric': 'tabular-nums' });
+    lab.textContent = fmt.sign(r.total_r, 1) + 'R';
+    svg.appendChild(lab);
+  });
+  host.appendChild(svg);
+}
+
+/* ------------------------------------------------------------------ */
+/* R 分布直方圖                                                         */
+/* ------------------------------------------------------------------ */
+function histogram(host, hist) {
+  host.innerHTML = '';
+  if (!hist || !hist.counts || !hist.counts.length || !hist.counts.some(c => c)) {
+    host.innerHTML = '<div class="empty">還沒有交易</div>'; return;
+  }
+  const ns = 'http://www.w3.org/2000/svg';
+  const W = 640, H = 150, P = { t: 10, r: 8, b: 24, l: 28 };
+  const n = hist.counts.length, max = Math.max(...hist.counts);
+  const bw = (W - P.l - P.r) / n;
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('class', 'chart');
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', '每筆交易 R 倍數的分布');
+  const mk = (t, a) => { const q = document.createElementNS(ns, t);
+    for (const k in a) q.setAttribute(k, a[k]); return q; };
+  const baseY = H - P.b;
+
+  hist.counts.forEach((c, i) => {
+    const lo = hist.edges[i], hi = hist.edges[i + 1];
+    const h = max ? c / max * (baseY - P.t) : 0;
+    if (c > 0) {
+      svg.appendChild(mk('rect', {
+        x: P.l + i * bw + 1, y: baseY - h, width: Math.max(1, bw - 2), height: h,
+        rx: 3, fill: hi <= 0 ? css('--bad') : css('--good'), opacity: .9 }));
+    }
+    if (Math.abs(lo % 1) < 1e-9 && lo % 2 === 0) {
+      const t = mk('text', { x: P.l + i * bw, y: H - 8, 'text-anchor': 'middle',
+        fill: css('--muted'), 'font-size': 10 });
+      t.textContent = lo;
+      svg.appendChild(t);
+    }
+  });
+  // 0 線：正負由位置承載
+  const zi = hist.edges.findIndex(e => Math.abs(e) < 1e-9);
+  if (zi >= 0) {
+    const zx = P.l + zi * bw;
+    svg.appendChild(mk('line', { x1: zx, x2: zx, y1: P.t - 4, y2: baseY + 4,
+      stroke: css('--axis'), 'stroke-width': 1.5 }));
+  }
+  svg.appendChild(mk('line', { x1: P.l, x2: W - P.r, y1: baseY, y2: baseY,
+    stroke: css('--axis'), 'stroke-width': 1 }));
+  const yl = mk('text', { x: P.l - 6, y: P.t + 8, 'text-anchor': 'end',
+    fill: css('--muted'), 'font-size': 10 });
+  yl.textContent = max;
+  svg.appendChild(yl);
+  host.appendChild(svg);
+}
+
+/* ------------------------------------------------------------------ */
+/* 渲染                                                                 */
+/* ------------------------------------------------------------------ */
+let DATA = null, curveMode = 1;   // 1 = 淨值, 2 = 累積 R
+
+// 雙軌。data.json 一定有（軌道 A）；data-csmom.json 只有雙軌模式才有。
+const TRACKS = [
+  { key: 'baseline', file: 'data.json',       name: 'A 基線' },
+  { key: 'csmom',    file: 'data-csmom.json', name: 'B 跨截面' },
+];
+const SNAP = {};                  // key -> snapshot
+let track = 'baseline';
+try { track = localStorage.getItem('track') || 'baseline'; } catch (e) {}
+let FETCH_ERR = null;             // 最近一次抓取失敗的說明（null = 正常）
+
+function tile(k, v, d, klass, hero) {
+  const n = el('div', 'tile' + (hero ? ' hero' : ''));
+  n.innerHTML = `<div class="k">${k}</div><div class="v num ${klass || ''}">${v}</div>` +
+    (d ? `<div class="d">${d}</div>` : '');
+  return n;
+}
+
+function render(data) {
+  DATA = data;
+  const p = data.portfolio, s = data.status;
+
+  // --- header ---
+  const age = (Date.now() - new Date(data.generated_at).getTime()) / 1000;
+  const barSec = { '1h': 3600, '3h': 10800, '4h': 14400 }[data.timeframe] || 3600;
+  const dot = $('#dot');
+  dot.className = 'dot' + (s.errors && s.errors.length ? ' err' : age > barSec * 2 ? ' stale' : '');
+  $('#updated').textContent = fmt.ago(data.generated_at);
+  $('#tf').textContent = `${data.config.symbols.length} 幣 · ${data.timeframe}`;
+
+  // --- 提示條 ---
+  const banner = $('#banner');
+  banner.innerHTML = '';
+  if (FETCH_ERR) {
+    // 抓不到就明說，並且講清楚畫面上這份資料是什麼時候的。
+    const b = el('div', 'banner err');
+    b.textContent = `抓不到最新資料（${FETCH_ERR}）。`
+      + `畫面上是 ${fmt.ago(data.generated_at)}的快取，不是現在的狀況。`;
+    banner.appendChild(b);
+  }
+  if (s.errors && s.errors.length) {
+    const b = el('div', 'banner');
+    b.textContent = '上次更新有錯誤：' + s.errors[s.errors.length - 1].split('\n')[0];
+    banner.appendChild(b);
+  } else if (age > barSec * 2) {
+    const b = el('div', 'banner');
+    b.textContent = `資料已經 ${fmt.ago(data.generated_at)}，常駐程式可能沒在跑。`;
+    banner.appendChild(b);
+  }
+
+  // --- 主要指標 ---
+  // 第一排：錢。帳戶現在多少、今天賺賠多少。
+  const t1 = $('#tiles1'); t1.innerHTML = '';
+  const pnl = p.pnl == null ? p.equity - p.initial_equity : p.pnl;
+  t1.appendChild(tile('帳戶淨值',
+    fmt.n(p.equity, 2) + ' U',
+    `${arrow(pnl)} ${fmt.sign(pnl, 2)} U（${fmt.sign(p.return_pct, 2)}%）　起始 ${fmt.n(p.initial_equity, 0)}`,
+    cls(pnl), true));
+  const today = p.today_pnl == null ? null : p.today_pnl;
+  t1.appendChild(tile('今日損益',
+    today == null ? '—' : fmt.sign(today, 2) + ' U',
+    today == null ? '' :
+      `${fmt.sign(p.today_pnl_pct, 2)}%　${p.open_count} 筆持倉中`,
+    cls(today), true));
+
+  // 第二排：錢的組成與活動量
+  const t2b = $('#tiles2'); t2b.innerHTML = '';
+  t2b.appendChild(tile('已實現',
+    fmt.sign(p.realized_pnl == null ? p.realized_equity - p.initial_equity
+             : p.realized_pnl, 2) + ' U',
+    '已平倉的損益', cls(p.realized_pnl)));
+  t2b.appendChild(tile('未實現',
+    fmt.sign(p.unrealized_pnl, 2) + ' U',
+    `${p.open_count} 筆未平倉`, cls(p.unrealized_pnl)));
+  t2b.appendChild(tile('交易筆數', fmt.n(p.n_trades, 0),
+    `${fmt.n(p.trades_per_day, 1)} 筆/天`));
+  t2b.appendChild(tile('累積 R', fmt.sign(p.total_r, 1),
+    `跑了 ${fmt.n(p.days_running, 0)} 天`, cls(p.total_r)));
+
+  // 第三排：統計。樣本小的時候這些只是雜訊，所以放在下面。
+  const t2 = $('#tiles3'); t2.innerHTML = '';
+  t2.appendChild(tile('期望值 R/筆', p.mean_r == null ? '—' : fmt.sign(p.mean_r, 4),
+    p.sd_r == null ? '' : `SD ${fmt.n(p.sd_r, 2)}`, cls(p.mean_r)));
+  t2.appendChild(tile('t 值', p.t_stat == null ? '—' : fmt.n(p.t_stat, 2),
+    p.t_stat == null ? '樣本不足'
+      : Math.abs(p.t_stat) < 1 ? '與隨機無異' : p.t_stat >= 2 ? '站得住腳' : '還不夠',
+    p.t_stat != null && p.t_stat >= 2 ? 'pos' : ''));
+  t2.appendChild(tile('勝率', p.win_rate == null ? '—' : fmt.pct(p.win_rate),
+    p.profit_factor == null ? '' : `PF ${fmt.n(p.profit_factor, 2)}`));
+  t2.appendChild(tile('最大回撤', p.max_dd_pct == null ? '—' : fmt.n(p.max_dd_pct, 1) + '%',
+    `${fmt.n(p.max_dd_r, 1)}R`, p.max_dd_pct > 0 ? 'neg' : ''));
+
+  // --- 雙軌 A/B ---
+  renderAB(data.ab);
+
+  // --- 曲線 ---
+  drawCurve();
+
+  // --- 持倉 ---
+  const pl = $('#positions'); pl.innerHTML = '';
+  $('#poscount').textContent = data.open_positions.length ? `${data.open_positions.length} 筆` : '';
+  if (!data.open_positions.length) {
+    pl.innerHTML = '<div class="empty">目前空手</div>';
+  } else {
+    data.open_positions.forEach(o => {
+      const c = el('div', 'poscard');
+      const pct = Math.min(100, Math.abs(o.unrealized_r) / 3 * 100);
+      c.innerHTML = `
+        <div class="posrow">
+          <span class="sym">${o.symbol.replace('USDT', '')}</span>
+          <span class="tag">${o.direction === 'long' ? '多' : '空'}</span>
+          <span class="tag">${o.signal_source}</span>
+          <span class="r num ${cls(o.unrealized_r)}">${arrow(o.unrealized_r)} ${fmt.sign(o.unrealized_r, 2)}R</span>
+        </div>
+        <div class="bar"><i style="width:${pct}%;background:${o.unrealized_r >= 0 ? 'var(--good)' : 'var(--bad)'}"></i></div>
+        <div class="meta">
+          <span>進場 ${fmt.px(o.entry_price)}</span>
+          <span>現價 ${fmt.px(o.last_price)}</span>
+          <span>停損 ${fmt.px(o.cur_stop)}${o.trail_active ? ' (移動)' : ''}</span>
+          <span>距停損 ${fmt.n(o.stop_distance_pct, 2)}%</span>
+          <span>持倉 ${o.bars_held} 根</span>
+          <span>最差 ${fmt.n(o.mae_r, 2)}R · 最好 ${fmt.n(o.mfe_r, 2)}R</span>
+        </div>`;
+      pl.appendChild(c);
+    });
+  }
+
+  divergingBars($('#symbolchart'), data.by_symbol.filter(d => d.n > 0));
+  histogram($('#hist'), data.r_histogram);
+
+  // --- 訊號來源 ---
+  const sb = $('#srcbody'); sb.innerHTML = '';
+  $('#srctable').hidden = false; $('#srcempty').hidden = true;
+  if (!data.by_source.length) {
+    // 以前這行直接把整張表（連同 #srcbody）換成一句話，下一次 render
+    // 就再也找不到 #srcbody，整個 render 從這裡拋例外中斷 ——
+    // 後面的最近交易、事件、設定全部停止更新。這就是「網頁不會更新」。
+    $('#srctable').hidden = true; $('#srcempty').hidden = false;
+  } else {
+    data.by_source.forEach(r => {
+      const tr = el('tr');
+      tr.innerHTML = `<td class="sym">${r.source}</td><td>${r.n}</td>
+        <td class="${cls(r.mean_r)}">${fmt.sign(r.mean_r, 3)}</td>
+        <td class="${cls(r.total_r)}">${fmt.sign(r.total_r, 1)}</td>
+        <td>${fmt.pct(r.win_rate, 0)}</td>
+        <td>${r.t_stat == null ? '—' : fmt.n(r.t_stat, 2)}</td>`;
+      sb.appendChild(tr);
+    });
+  }
+
+  // --- 成本 ---
+  const c = data.cost || {};
+  const cw = $('#cost');
+  if (c.n) {
+    cw.innerHTML = `
+      <div class="meta" style="margin-top:0">
+        <span>每筆成本 <b class="num">${fmt.n(c.mean_cost_r, 4)} R</b></span>
+        <span>毛期望值 <b class="num ${cls(c.mean_gross_r)}">${fmt.sign(c.mean_gross_r, 4)}</b></span>
+        <span>淨期望值 <b class="num ${cls(c.mean_net_r)}">${fmt.sign(c.mean_net_r, 4)}</b></span>
+        <span>中位停損 ${fmt.n(c.median_stop_pct, 2)}%</span>
+      </div>
+      <div class="meta">若停損放寬一倍，成本降到 ${fmt.n(c.cost_r_if_stop_2x, 4)} R，
+        淨期望值約 ${fmt.sign(c.net_r_if_stop_2x, 4)}（只算成本效果，不含勝率變化）</div>`;
+  } else { cw.innerHTML = '<div class="empty">還沒有交易</div>'; }
+
+  // --- 最近交易 ---
+  const tb = $('#tradebody'); tb.innerHTML = '';
+  $('#tradetable').hidden = false; $('#tradeempty').hidden = true;
+  if (!data.recent_trades.length) {
+    $('#tradetable').hidden = true; $('#tradeempty').hidden = false;
+  } else {
+    data.recent_trades.slice(0, 25).forEach(t => {
+      const tr = el('tr');
+      tr.innerHTML = `<td><span class="sym">${t.symbol.replace('USDT', '')}</span>
+          <span class="tag">${t.direction === 'long' ? '多' : '空'}</span></td>
+        <td style="text-align:left;color:var(--muted);font-size:11.5px">${t.signal_source}</td>
+        <td style="color:var(--muted);font-size:11.5px">${fmt.time(t.exit_time)}</td>
+        <td style="color:var(--muted);font-size:11.5px">${t.exit_reason}</td>
+        <td class="${cls(t.r_multiple)}">${fmt.sign(t.r_multiple, 2)}</td>`;
+      tb.appendChild(tr);
+    });
+  }
+
+  // --- 事件 ---
+  const fd = $('#feed'); fd.innerHTML = '';
+  if (!data.events.length) {
+    fd.innerHTML = '<div class="empty">還沒有事件。開倉與平倉會出現在這裡。</div>';
+  } else {
+    data.events.slice(0, 20).forEach(e => {
+      const d = el('div', 'fitem');
+      const pl2 = e.payload || {};
+      const when = new Date(e.ts).toLocaleString('zh-TW',
+        { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
+      if (e.kind === 'close') {
+        d.innerHTML = `<span class="t">${when}</span>
+          <span><b>${e.symbol.replace('USDT', '')}</b> 平倉
+            <span class="tag">${pl2.direction === 'long' ? '多' : '空'}</span>
+            <span style="color:var(--muted)">${pl2.reason}</span></span>
+          <span class="r ${cls(pl2.r)}">${fmt.sign(pl2.r, 2)}R</span>`;
+      } else {
+        d.innerHTML = `<span class="t">${when}</span>
+          <span><b>${e.symbol.replace('USDT', '')}</b> 開倉
+            <span class="tag">${pl2.direction === 'long' ? '多' : '空'}</span>
+            <span style="color:var(--muted)">${pl2.source} @ ${fmt.px(pl2.entry)}</span></span>`;
+      }
+      fd.appendChild(d);
+    });
+  }
+
+  // --- footer ---
+  const cf = data.config;
+  $('#cfg').innerHTML =
+    `起點 ${fmt.time(data.started_at)}（已跑 ${fmt.n(p.days_running, 1)} 天）· ` +
+    `訊號 ${cf.signals.join(' / ')} · 停損 ${cf.stop_mode} ${cf.atr_mult}×ATR · ` +
+    `每筆風險 ${cf.risk_pct}% · 手續費 ${(cf.fee_rate * 100).toFixed(3)}% + 滑價 ${cf.slippage_bps} bps<br>` +
+    `下次更新 ${fmt.time(s.next_update)} · 追蹤 ${s.symbols_tracked}/${s.symbols_configured} 幣` +
+    (p.req_n ? ` · 達 t=2 還需約 ${p.req_n.toLocaleString()} 筆` : '');
+}
+
+function drawCurve() {
+  if (!DATA) return;
+  const isEq = curveMode === 1;
+  lineChart($('#curve'), DATA.equity_curve, curveMode,
+    isEq ? '組合淨值' : '累積 R',
+    isEq ? (v => fmt.n(v, 0)) : (v => fmt.sign(v, 0)));
+}
+
+/* ------------------------------------------------------------------ */
+/* 載入                                                                 */
+/* ------------------------------------------------------------------ */
+async function grab(t) {
+  // 回傳 {ok, data} 或 {ok:false, why}。404 對 csmom 來說是正常的（單軌模式）。
+  try {
+    const r = await fetch(t.file + '?t=' + Date.now(), { cache: 'no-store' });
+    if (r.status === 404 && t.key !== 'baseline') return { ok: false, missing: true };
+    if (!r.ok) return { ok: false, why: 'HTTP ' + r.status };
+    // service worker 在離線時會標這個；資料是好的，但不是現在的。
+    const stale = r.headers.get('X-From-Cache') === '1';
+    return { ok: true, stale, data: await r.json() };
+  } catch (e) {
+    return { ok: false, why: '連不上（' + (e && e.message ? e.message : 'network') + '）' };
+  }
+}
+
+async function load(showSpin) {
+  const btn = $('#refresh');
+  if (showSpin) btn.textContent = '…';
+  try {
+    // 先抓主軌，它會告訴我們還有哪些軌道；再去抓其餘的。
+    const first = await grab(TRACKS[0]);
+    const listed = (first.ok && first.data.tracks) || ['baseline'];
+    const want = TRACKS.filter(t => t.key === 'baseline' || listed.includes(t.key));
+    const rest = await Promise.all(want.slice(1).map(grab));
+    const got = [first, ...rest];
+    let err = null;
+    got.forEach((g, i) => {
+      const t = want[i];
+      if (g.ok) {
+        if (g.stale && !err) err = '離線';
+        SNAP[t.key] = g.data;
+        try { localStorage.setItem('snap:' + t.key, JSON.stringify(g.data)); } catch (e) {}
+      } else if (!g.missing) {
+        if (!err) err = g.why;
+        try {
+          const c = localStorage.getItem('snap:' + t.key)
+                 || (t.key === 'baseline' ? localStorage.getItem('snap') : null);
+          if (c) SNAP[t.key] = JSON.parse(c);
+        } catch (e) {}
+      } else {
+        delete SNAP[t.key];
+      }
+    });
+    // 這裡是整個「網頁不會更新」bug 的核心：以前抓取失敗會靜靜地
+    // 拿快取重畫，畫面看起來一切正常，只是數字永遠停在那一刻。
+    // 現在失敗就明說，而且說清楚畫面上這份是什麼時候的。
+    for (const t of TRACKS) if (!want.includes(t)) delete SNAP[t.key];
+    FETCH_ERR = err;
+    if (!SNAP.baseline) {
+      $('#banner').innerHTML =
+        '<div class="banner err">讀不到資料' + (err ? '（' + err + '）' : '') +
+        '。第一次開啟需要連線。</div>';
+      return;
+    }
+    if (!SNAP[track]) track = 'baseline';
+    renderTrackBar();
+    render(SNAP[track]);
+  } finally { btn.textContent = '↻'; }
+}
+
+function renderTrackBar() {
+  const bar = $('#trackbar'), seg = $('#trackseg');
+  const avail = TRACKS.filter(t => SNAP[t.key]);
+  if (avail.length < 2) { bar.hidden = true; return; }
+  bar.hidden = false;
+  seg.innerHTML = '';
+  for (const t of avail) {
+    const b = el('button');
+    b.textContent = t.name;
+    b.setAttribute('aria-pressed', String(t.key === track));
+    b.addEventListener('click', () => {
+      track = t.key;
+      try { localStorage.setItem('track', track); } catch (e) {}
+      renderTrackBar();
+      render(SNAP[track]);
+    });
+    seg.appendChild(b);
+  }
+  const s = SNAP[track];
+  $('#tracknote').textContent = s && s.config && s.config.cross
+    ? `Score=(close−close[${s.config.cross.lookback}])/ATR，每根每方向放行前 ${s.config.cross.top_k} 名`
+    : '每個幣各自為政，沒有跨截面過濾';
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('#curvetoggle button').forEach(b => {
+    b.addEventListener('click', () => {
+      curveMode = Number(b.dataset.mode);
+      document.querySelectorAll('#curvetoggle button').forEach(x =>
+        x.setAttribute('aria-pressed', String(Number(x.dataset.mode) === curveMode)));
+      drawCurve();
+    });
+  });
+  $('#refresh').addEventListener('click', () => load(true));
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) load(false); });
+  window.addEventListener('resize', () => { if (DATA) { drawCurve();
+    divergingBars($('#symbolchart'), DATA.by_symbol.filter(d => d.n > 0));
+    histogram($('#hist'), DATA.r_histogram); } });
+  load(false);
+  setInterval(() => { if (!document.hidden) load(false); }, 60000);
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+});
+
+
+// --------------------------------------------------------------------
+// 雙軌 A/B。單軌跑的時候 data.ab 不存在，整段隱藏。
+// 這裡刻意不畫圖、不加顏色強調誰贏 —— n 還是個位數的時候，
+// 把差距畫成長條圖只會讓人把雜訊當結論。
+// --------------------------------------------------------------------
+function renderAB(ab) {
+  const wrap = $('#abwrap');
+  const both = TRACKS.every(t => SNAP[t.key]);
+  if (!both && (!ab || !ab.tracks || !ab.tracks.length)) { wrap.hidden = true; return; }
+  wrap.hidden = false;
+
+  const rows = both
+    ? TRACKS.map(t => ({ label: t.key, name: t.name, p: SNAP[t.key].portfolio }))
+    : ab.tracks.map(r => ({ label: r.label,
+        name: (TRACKS.find(t => t.key === r.label) || {}).name || r.label, p: r }));
+
+  let h = '<table class="tbl"><thead><tr><th>軌道</th><th>淨值</th><th>損益</th>'
+        + '<th>交易</th><th>持倉</th><th>期望值 R</th><th>累積 R</th></tr></thead><tbody>';
+  for (const r of rows) {
+    const p = r.p;
+    h += `<tr><td>${r.name}${r.label === track ? ' ←' : ''}</td>`
+       + `<td>${fmt.n(p.equity, 2)}</td>`
+       + `<td class="${cls(p.pnl)}">${fmt.sign(p.pnl, 2)}</td>`
+       + `<td>${p.n_trades}</td><td>${p.open_count}</td>`
+       + `<td>${p.mean_r == null ? '—' : fmt.sign(p.mean_r, 4)}</td>`
+       + `<td>${fmt.sign(p.total_r, 1)}</td></tr>`;
+  }
+  h += '</tbody></table>';
+
+  const m = (ab && ab.mask_stats) || {};
+  const notes = [];
+  if (m.signals_before) {
+    notes.push(`跨截面遮罩：${m.signals_before} → ${m.signals_after} 個訊號`
+             + `（濾掉 ${fmt.n(m.drop_pct, 1)}%）`);
+  }
+  const a = rows.find(r => r.label === 'baseline');
+  const b = rows.find(r => r.label === 'csmom');
+  if (a && b && a.p.mean_r != null && b.p.mean_r != null) {
+    notes.push(`μ(B) − μ(A) = ${fmt.sign(b.p.mean_r - a.p.mean_r, 4)} R`);
+    const least = Math.min(a.p.n_trades, b.p.n_trades);
+    notes.push(least < 2500
+      ? `要在 t=2 下判定 +0.08R 的差距，每軌需要約 2,500 筆；目前較少的一軌 ${least} 筆。`
+        + `<b>現在的差額還不能當結論。</b>`
+      : '樣本已達預先登記的判定門檻。');
+  } else {
+    notes.push('兩軌都還沒有平倉交易，期望值差額算不出來。');
+  }
+  h += `<div class="note" style="margin-top:8px">${notes.join('<br>')}</div>`;
+  $('#ab').innerHTML = h;
+
+  if (both) dualCurve();
+}
+
+/* 兩軌淨值疊圖。都換算成「相對起始資金的 %」，起始資金不同也比得了。
+   顏色不是唯一的訊息載體：A 實線、B 虛線，另外有圖例與上面那張表。 */
+function dualCurve() {
+  const host = $('#abcurve');
+  if (!host) return;
+  const series = TRACKS.map(t => {
+    const s = SNAP[t.key];
+    const base = s.portfolio.initial_equity || 1;
+    return { name: t.name,
+             pts: (s.equity_curve || []).map(p => [p[0], (p[1] / base - 1) * 100]) };
+  }).filter(x => x.pts.length >= 2);
+  if (series.length < 2) { host.innerHTML = '<div class="empty">資料還不夠畫圖</div>'; return; }
+
+  const W = 640, H = 190, P = { t: 12, r: 10, b: 22, l: 48 };
+  const all = series.flatMap(s => s.pts);
+  const xs = all.map(p => p[0]), ys = all.map(p => p[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+  let lo = Math.min(...ys, 0), hi = Math.max(...ys, 0);
+  if (lo === hi) { lo -= 1; hi += 1; }
+  const pad = (hi - lo) * 0.12; lo -= pad; hi += pad;
+  const X = t => P.l + (t - x0) / Math.max(1, x1 - x0) * (W - P.l - P.r);
+  const Y = v => P.t + (hi - v) / (hi - lo) * (H - P.t - P.b);
+  const ns = 'http://www.w3.org/2000/svg';
+  const mk = (t, a) => { const n = document.createElementNS(ns, t);
+    for (const k in a) n.setAttribute(k, a[k]); return n; };
+
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('class', 'chart');
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', '兩軌報酬率走勢比較');
+  for (let i = 0; i <= 4; i++) {
+    const v = lo + (hi - lo) * i / 4, y = Y(v);
+    svg.appendChild(mk('line', { x1: P.l, x2: W - P.r, y1: y, y2: y,
+      stroke: css('--grid'), 'stroke-width': 1 }));
+    const tx = mk('text', { x: P.l - 7, y: y + 3.5, 'text-anchor': 'end',
+      fill: css('--muted'), 'font-size': 10.5, 'font-variant-numeric': 'tabular-nums' });
+    tx.textContent = fmt.n(v, 1) + '%';
+    svg.appendChild(tx);
+  }
+  if (0 >= lo && 0 <= hi) {
+    svg.appendChild(mk('line', { x1: P.l, x2: W - P.r, y1: Y(0), y2: Y(0),
+      stroke: css('--axis'), 'stroke-width': 1, 'stroke-dasharray': '3 3' }));
+  }
+  const colors = [css('--series'), css('--series-b')];
+  series.forEach((s, i) => {
+    const d = s.pts.map((p, j) => (j ? 'L' : 'M') + X(p[0]).toFixed(2) + ' ' + Y(p[1]).toFixed(2)).join(' ');
+    svg.appendChild(mk('path', { d, fill: 'none', stroke: colors[i],
+      'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round',
+      ...(i ? { 'stroke-dasharray': '6 4' } : {}) }));
+  });
+  host.innerHTML = '';
+  const lg = el('div');
+  lg.innerHTML = series.map((s, i) =>
+    `<span class="lgd"><i style="background:${colors[i]}"></i>${s.name}</span>`).join('');
+  host.appendChild(svg);
+  host.appendChild(lg);
+}

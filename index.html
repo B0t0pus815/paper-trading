@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>紙上交易 · TTMSqz+SMC</title>
+<meta name="description" content="TTM Squeeze + SMC 策略的前進式紙上交易即時成績單">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#f9f9f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="紙上交易">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon-192.png" sizes="192x192">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<header>
+  <div class="hwrap">
+    <div>
+      <div class="title">紙上交易 · TTMSqz+SMC</div>
+      <div class="sub"><span class="dot" id="dot"></span><span id="updated">載入中…</span>
+        <span>·</span><span id="tf"></span></div>
+    </div>
+    <div class="spacer"></div>
+    <button class="icon" id="refresh" aria-label="重新整理">&#8635;</button>
+  </div>
+</header>
+
+<main>
+  <div id="banner"></div>
+
+  <div id="trackbar" hidden>
+    <span class="seg" id="trackseg"></span>
+    <span class="note" id="tracknote"></span>
+  </div>
+
+  <section>
+    <div class="tiles" id="tiles1"></div>
+    <div class="tiles four" id="tiles2" style="margin-top:10px"></div>
+  </section>
+
+  <section>
+    <h2>統計 <span class="note">樣本還小的時候只是雜訊，別當結論</span></h2>
+    <div class="tiles four" id="tiles3"></div>
+  </section>
+
+  <section id="abwrap" hidden>
+    <h2>雙軌 A/B <span class="note">同一份行情、同一個時點，兩份獨立帳本</span></h2>
+    <div class="card"><div class="chartwrap" id="abcurve"></div></div>
+    <div id="ab"></div>
+  </section>
+
+  <section>
+    <h2>走勢
+      <span class="spacer" style="flex:1"></span>
+      <span class="seg" id="curvetoggle">
+        <button data-mode="1" aria-pressed="true">淨值</button>
+        <button data-mode="2" aria-pressed="false">累積 R</button>
+      </span>
+    </h2>
+    <div class="card"><div class="chartwrap" id="curve"></div></div>
+  </section>
+
+  <section>
+    <h2>目前持倉 <span class="note" id="poscount"></span></h2>
+    <div class="poslist" id="positions"></div>
+  </section>
+
+  <section>
+    <h2>每個幣的累積 R <span class="note">0 線兩側 = 賺賠</span></h2>
+    <div class="card"><div id="symbolchart"></div></div>
+  </section>
+
+  <section>
+    <h2>成本拆解 <span class="note">成本吃掉多少期望值</span></h2>
+    <div class="card" id="cost"></div>
+  </section>
+
+  <section>
+    <h2>R 分布 <span class="note">每筆交易的損益倍數</span></h2>
+    <div class="card"><div id="hist"></div></div>
+  </section>
+
+  <section>
+    <h2>依訊號來源</h2>
+    <div class="card" id="srcwrap">
+      <table id="srctable">
+        <thead><tr><th>來源</th><th>筆數</th><th>期望值</th><th>總 R</th><th>勝率</th><th>t</th></tr></thead>
+        <tbody id="srcbody"></tbody>
+      </table>
+      <div class="empty" id="srcempty" hidden>還沒有交易</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>最近交易</h2>
+    <div class="card" id="tradewrap">
+      <table id="tradetable">
+        <thead><tr><th>幣種</th><th style="text-align:left">來源</th><th>出場</th><th>原因</th><th>R</th></tr></thead>
+        <tbody id="tradebody"></tbody>
+      </table>
+      <div class="empty" id="tradeempty" hidden>還沒有平倉的交易</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>事件</h2>
+    <div class="card"><div class="feed" id="feed"></div></div>
+  </section>
+
+  <footer>
+    <div id="cfg"></div>
+    <div style="margin-top:10px">
+      這是模擬交易，沒有真實下單。資料由你電腦上的 <code>run.py paper</code> 產生後推上來。
+    </div>
+  </footer>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
