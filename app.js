@@ -7,6 +7,10 @@ const el = (t, c) => { const n = document.createElement(t); if (c) n.className =
 const NBSP = ' ';
 
 const fmt = {
+  qty: (v) => v == null ? '—'
+    : Math.abs(v) >= 1000 ? Math.round(v).toLocaleString()
+    : Math.abs(v) >= 1 ? v.toFixed(2)
+    : v.toPrecision(3),
   n: (v, d = 2) => v == null || !isFinite(v) ? '—' :
       (v < 0 ? '\u2212' : '') + Math.abs(v).toLocaleString('en-US',
       { minimumFractionDigits: d, maximumFractionDigits: d }),
@@ -311,7 +315,10 @@ function render(data) {
     '已平倉的損益', cls(p.realized_pnl)));
   t2b.appendChild(tile('未實現',
     fmt.sign(p.unrealized_pnl, 2) + ' U',
-    `${p.open_count} 筆未平倉`, cls(p.unrealized_pnl)));
+    p.exposure == null ? `${p.open_count} 筆未平倉`
+      : `${p.open_count} 筆 · 持倉 ${fmt.n(p.exposure, 0)} U`
+        + `（本金的 ${fmt.n(p.exposure_pct, 1)}%）`,
+    cls(p.unrealized_pnl)));
   t2b.appendChild(tile('交易筆數', fmt.n(p.n_trades, 0),
     `${fmt.n(p.trades_per_day, 1)} 筆/天`));
   t2b.appendChild(tile('累積 R', fmt.sign(p.total_r, 1),
@@ -353,7 +360,14 @@ function render(data) {
           <span class="r num ${cls(o.unrealized_r)}">${arrow(o.unrealized_r)} ${fmt.sign(o.unrealized_r, 2)}R</span>
         </div>
         <div class="bar"><i style="width:${pct}%;background:${o.unrealized_r >= 0 ? 'var(--good)' : 'var(--bad)'}"></i></div>
+        <div class="posamt">
+          <span class="amt">${fmt.n(o.notional, 0)} U</span>
+          <span class="sub">持倉額 · 現值 ${fmt.n(o.market_value, 0)} U
+            · ${fmt.sign(o.unrealized_pnl, 2)} U</span>
+        </div>
         <div class="meta">
+          <span>數量 ${fmt.qty(o.qty)}</span>
+          <span>風險 ${fmt.n(o.R_dollar, 2)} U/R</span>
           <span>進場 ${fmt.px(o.entry_price)}</span>
           <span>現價 ${fmt.px(o.last_price)}</span>
           <span>停損 ${fmt.px(o.cur_stop)}${o.trail_active ? ' (移動)' : ''}</span>
@@ -414,6 +428,8 @@ function render(data) {
       tr.innerHTML = `<td><span class="sym">${t.symbol.replace('USDT', '')}</span>
           <span class="tag">${t.direction === 'long' ? '多' : '空'}</span></td>
         <td style="text-align:left;color:var(--muted);font-size:11.5px">${t.signal_source}</td>
+        <td>${t.notional == null ? '—' : fmt.n(t.notional, 0)}</td>
+        <td class="${cls(t.pnl_net)}">${fmt.sign(t.pnl_net, 2)}</td>
         <td style="color:var(--muted);font-size:11.5px">${fmt.time(t.exit_time)}</td>
         <td style="color:var(--muted);font-size:11.5px">${t.exit_reason}</td>
         <td class="${cls(t.r_multiple)}">${fmt.sign(t.r_multiple, 2)}</td>`;

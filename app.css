@@ -181,3 +181,12 @@ footer code { font-size: 11px; background: var(--surface); padding: 1px 5px; bor
 .lgd { display: inline-flex; align-items: center; gap: 5px; margin-right: 14px;
        font-size: 12px; color: var(--muted); }
 .lgd i { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+
+
+/* 持倉額。使用者問「每筆下多少 U」問了兩次，代表它該是卡片上的主角之一，
+   不是埋在 meta 那排小字裡。 */
+.posamt { display: flex; align-items: baseline; gap: 8px; margin-top: 9px;
+          flex-wrap: wrap; }
+.posamt .amt { font-size: 17px; font-weight: 640; font-variant-numeric: tabular-nums; }
+.posamt .sub { font-size: 11.5px; color: var(--muted);
+               font-variant-numeric: tabular-nums; }
