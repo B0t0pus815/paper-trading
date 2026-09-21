@@ -716,3 +716,255 @@ function dualCurve() {
   host.appendChild(svg);
   host.appendChild(lg);
 }
+
+/* ------------------------------------------------------------------ */
+/* 倍數壓力鏡                                                          */
+/*                                                                     */
+/* 這一塊跟頁面上其他東西不一樣：它畫的是**歷史回測**，不是紙上交易。   */
+/* 目的只有一個 —— 在真的把每筆風險調大之前，先看著它跌。              */
+/*                                                                     */
+/* 演算法刻意簡單：不複利，E(t) = E0 + k × 累積R(t)。複利會讓倍數效果   */
+/* 跟路徑纏在一起，看不出倍數本身做了什麼。                            */
+/*                                                                     */
+/* 三條線是「有序的量級」不是三個類別，所以用單一色相由淺到深的序數色階，*/
+/* 不是三個不同顏色。而且它們數學上不會交叉（|回撤%| 對 k 單調遞增），  */
+/* 所以中間可以填成三條乾淨的帶狀區 —— 那些帶就是「槓桿多挖的深度」。   */
+/* ------------------------------------------------------------------ */
+let STRESS = null;
+let stressView = 'dd';
+
+async function loadStress() {
+  try {
+    const r = await fetch('stress.json');
+    if (!r.ok) return;                       // 沒產生過就整塊不出現
+    STRESS = await r.json();
+    $('#stresswrap').hidden = false;
+    renderStress();
+  } catch (e) { /* 這塊是參考資料，抓不到不該影響交易畫面 */ }
+}
+
+function stressSeries() {
+  const e0 = STRESS.e0;
+  return STRESS.mults.map(m => {
+    let peak = e0;
+    const pts = STRESS.points.map(p => {
+      const eq = e0 + p[1] * m.r_dollar;
+      if (eq > peak) peak = eq;
+      return [p[0], stressView === 'eq' ? eq : (eq - peak) / peak * 100];
+    });
+    return { m, pts, color: css('--stress-' + m.k), name: m.k + '×' };
+  });
+}
+
+function renderStress() {
+  if (!STRESS) return;
+  const S = STRESS, st = S.stats;
+
+  $('#stresswarn').innerHTML =
+    `<b>歷史回測，不是預測，而且是樣本內。</b>`
+    + `往上那一半被選擇偏差灌過水，<b>往下那一半才是可信的</b> —— `
+    + `樣本外的回撤通常只會更深。`;
+
+  drawStress();
+
+  // --- 表：兩種回撤定義都列，它們回答不同的問題 ---
+  let h = '<table class="tbl"><thead><tr><th>每筆風險</th><th>1R</th>'
+        + '<th>從前高回撤</th><th>最差起點</th><th>期末</th></tr></thead><tbody>';
+  for (const m of S.mults) {
+    h += `<tr><td class="k"><span class="swatch" style="background:${css('--stress-' + m.k)}"></span>`
+       + `${m.k}×${m.k === 1 ? '（目前）' : ''}<div class="note" style="font-size:10.5px">`
+       + `帳戶的 ${m.risk_pct}%</div></td>`
+       + `<td>${m.r_dollar} U</td>`
+       + `<td class="neg">${fmt.n(m.dd_from_peak_pct, 1)}%<div class="note" style="font-size:10.5px">`
+       + `${fmt.n(m.dd_from_peak_usd, 0)} U</div></td>`
+       + `<td class="neg">${fmt.n(m.dd_worst_start_pct, 1)}%</td>`
+       + `<td class="${m.final_pct >= 0 ? 'pos' : 'neg'}">${fmt.sign(m.final_pct, 0)}%</td></tr>`;
+  }
+  h += '</tbody></table>';
+  $('#stressstats').innerHTML = h;
+
+  $('#stressnote').innerHTML =
+    `<b>兩個回撤定義回答不同的問題。</b>`
+    + `「從前高回撤」是歷史那條路徑上你從高水位掉了多少；`
+    + `「最差起點」是如果你剛好從那段的起點開始跑，本金會虧掉多少`
+    + `（數學上 = 倍數 × ${fmt.n(st.max_dd_r, 1)}R，跟哪天開始無關）。`
+    + `前者比較小，只是因為那時帳戶已經先漲了好幾年 —— `
+    + `<b>如果你今天才開始跑，你面對的是後面那個數字。</b><br><br>`
+    + `圖上有兩個不同的低點，值得分開看：<br>`
+    + `· <b>百分比最深</b>在 ${S.mults[0].dd_from_peak_at}`
+    + `（那時帳戶還小，同樣的 R 換算成 % 就更大）。<br>`
+    + `· <b>金額最大、也最久</b>的那一次是 ${st.dd_start} 見頂，`
+    + `跌到 ${st.dd_trough}，跨越 ${st.dd_trades.toLocaleString()} 筆交易，`
+    + (st.recovered ? '後來回到前高。' : '<b>到資料結束都還沒回到前高。</b>')
+    + `<br><br>處於 20R 以上回撤的時間占 ${st.pct_time_under_20r}%，`
+    + `50R 以上 ${st.pct_time_under_50r}%，100R 以上 ${st.pct_time_under_100r}%。`
+    + `挑倍數的時候，挑一個你在<b>第六個月還在虧、還沒回到前高</b>的時候`
+    + `不會把程式關掉的數字。`
+    + `<br><br>來源：${S.source.what}，${S.source.start} ~ ${S.source.end}，`
+    + `${S.source.n_trades.toLocaleString()} 筆，不複利。`;
+}
+
+function drawStress() {
+  const host = $('#stresschart');
+  if (!host || !STRESS) return;
+  host.innerHTML = '';
+  const series = stressSeries();
+  const isDD = stressView === 'dd';
+
+  const W = 640, H = 250, P = { t: 14, r: 12, b: 24, l: 52 };
+  const xs = series[0].pts.map(p => p[0]);
+  const x0 = xs[0], x1 = xs[xs.length - 1];
+  const all = series.flatMap(s => s.pts.map(p => p[1]));
+  let lo = Math.min(...all), hi = Math.max(...all);
+  if (isDD) hi = 0; else lo = Math.min(lo, STRESS.e0);
+  if (lo === hi) { lo -= 1; hi += 1; }
+  const pad = (hi - lo) * 0.08; lo -= pad; if (!isDD) hi += pad;
+  const X = t => P.l + (t - x0) / Math.max(1, x1 - x0) * (W - P.l - P.r);
+  const Y = v => P.t + (hi - v) / (hi - lo) * (H - P.t - P.b);
+  const fv = v => isDD ? v.toFixed(0) + '%' : Math.round(v).toLocaleString();
+
+  const ns = 'http://www.w3.org/2000/svg';
+  const mk = (t, a) => { const n = document.createElementNS(ns, t);
+    for (const k in a) n.setAttribute(k, a[k]); return n; };
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('class', 'chart');
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label',
+    isDD ? '三種每筆風險下的水下回撤比較' : '三種每筆風險下的帳戶淨值比較');
+
+  for (let i = 0; i <= 4; i++) {
+    const v = lo + (hi - lo) * i / 4, y = Y(v);
+    svg.appendChild(mk('line', { x1: P.l, x2: W - P.r, y1: y, y2: y,
+      stroke: css('--grid'), 'stroke-width': 1 }));
+    const tx = mk('text', { x: P.l - 7, y: y + 3.5, 'text-anchor': 'end',
+      fill: css('--muted'), 'font-size': 10.5, 'font-variant-numeric': 'tabular-nums' });
+    tx.textContent = fv(v);
+    svg.appendChild(tx);
+  }
+  // 水平面（回撤 0 / 初始資金）
+  const base = isDD ? 0 : STRESS.e0;
+  if (base >= lo && base <= hi) {
+    svg.appendChild(mk('line', { x1: P.l, x2: W - P.r, y1: Y(base), y2: Y(base),
+      stroke: css('--axis'), 'stroke-width': 1 }));
+  }
+
+  const path = pts => pts.map((p, i) =>
+    (i ? 'L' : 'M') + X(p[0]).toFixed(2) + ' ' + Y(p[1]).toFixed(2)).join(' ');
+
+  // 帶狀區：三條線不會交叉，所以中間就是「槓桿多挖的深度」。
+  // 畫成互不重疊的帶，而不是三層半透明疊加 —— 疊加會讓最淺的區域最深，剛好相反。
+  if (isDD) {
+    const edges = [series[0].pts.map(p => [p[0], 0]), ...series.map(s => s.pts)];
+    for (let i = 0; i < series.length; i++) {
+      const top = edges[i], bot = edges[i + 1];
+      const d = path(top) + ' L ' + bot.slice().reverse()
+        .map(p => X(p[0]).toFixed(2) + ' ' + Y(p[1]).toFixed(2)).join(' L ') + ' Z';
+      svg.appendChild(mk('path', { d, fill: series[i].color,
+        'fill-opacity': 0.16, stroke: 'none' }));
+    }
+  }
+  series.forEach(s => svg.appendChild(mk('path', {
+    d: path(s.pts), fill: 'none', stroke: s.color, 'stroke-width': 2,
+    'stroke-linejoin': 'round', 'stroke-linecap': 'round' })));
+
+  // 自己組日期字串。zh-TW 的 toLocaleDateString 會走民國紀年，
+  // 兩端都印出同一個奇怪的年份，看不出跨了幾年。
+  const ym = t => { const d = new Date(t);
+    return d.getUTCFullYear() + '/' + (d.getUTCMonth() + 1); };
+  [[x0, 'start', P.l], [x1, 'end', W - P.r]].forEach(([t, anchor, x]) => {
+    const n = mk('text', { x, y: H - 7, 'text-anchor': anchor,
+      fill: css('--muted'), 'font-size': 10.5 });
+    n.textContent = ym(t);
+    svg.appendChild(n);
+  });
+
+  // 選擇性直接標註：只標最深那條的谷底（回撤圖）或各線終點（淨值圖）
+  if (isDD) {
+    const s = series[series.length - 1];
+    let j = 0;
+    s.pts.forEach((p, i) => { if (p[1] < s.pts[j][1]) j = i; });
+    const px = X(s.pts[j][0]), py = Y(s.pts[j][1]);
+    svg.appendChild(mk('circle', { cx: px, cy: py, r: 4, fill: s.color,
+      stroke: css('--surface'), 'stroke-width': 2 }));
+    // 標註要壓在線上面，所以描一圈 surface 色的外框（paint-order 讓框在字下面）
+    const right = px > W * 0.6;
+    const lab = mk('text', { x: right ? px - 9 : px + 9, y: py + 14,
+      'text-anchor': right ? 'end' : 'start', fill: css('--ink'),
+      'font-size': 12, 'font-weight': 640,
+      stroke: css('--surface'), 'stroke-width': 3.5, 'paint-order': 'stroke' });
+    lab.textContent = `${s.m.k}× 谷底 ${s.pts[j][1].toFixed(0)}%`;
+    svg.appendChild(lab);
+  } else {
+    series.forEach(s => {
+      const p = s.pts[s.pts.length - 1];
+      svg.appendChild(mk('circle', { cx: X(p[0]), cy: Y(p[1]), r: 3.5, fill: s.color,
+        stroke: css('--surface'), 'stroke-width': 2 }));
+    });
+  }
+
+  const cross = mk('line', { y1: P.t, y2: H - P.b, stroke: css('--axis'),
+    'stroke-width': 1, opacity: 0 });
+  svg.appendChild(cross);
+  const dots = series.map(s => {
+    const c = mk('circle', { r: 3.5, fill: s.color, stroke: css('--surface'),
+      'stroke-width': 2, opacity: 0 });
+    svg.appendChild(c); return c;
+  });
+  host.appendChild(svg);
+  const tip = el('div', 'tip'); host.appendChild(tip);
+
+  const move = (ev) => {
+    const r = svg.getBoundingClientRect();
+    const cx = (ev.touches ? ev.touches[0].clientX : ev.clientX) - r.left;
+    const t = x0 + (cx / r.width * W - P.l) / (W - P.l - P.r) * (x1 - x0);
+    let best = 0, bd = Infinity;
+    for (let i = 0; i < xs.length; i++) {
+      const dd = Math.abs(xs[i] - t); if (dd < bd) { bd = dd; best = i; }
+    }
+    const px = X(xs[best]);
+    cross.setAttribute('x1', px); cross.setAttribute('x2', px);
+    cross.setAttribute('opacity', 1);
+    let rows = '';
+    series.forEach((s, i) => {
+      const v = s.pts[best][1];
+      dots[i].setAttribute('cx', px);
+      dots[i].setAttribute('cy', Y(v));
+      dots[i].setAttribute('opacity', 1);
+      rows += `${s.m.k}× ${isDD ? fmt.n(v, 1) + '%' : Math.round(v).toLocaleString() + ' U'}<br>`;
+    });
+    tip.innerHTML = rows + `<span style="opacity:.7">`
+      + new Date(xs[best]).toLocaleDateString('zh-TW',
+        { year: 'numeric', month: '2-digit', day: '2-digit' }) + '</span>';
+    tip.classList.add('on');
+    const left = Math.min(Math.max(px / W * r.width - tip.offsetWidth / 2, 2),
+                          r.width - tip.offsetWidth - 2);
+    tip.style.left = left + 'px';
+    tip.style.top = '4px';
+  };
+  const leave = () => {
+    cross.setAttribute('opacity', 0);
+    dots.forEach(d => d.setAttribute('opacity', 0));
+    tip.classList.remove('on');
+  };
+  svg.addEventListener('pointermove', move);
+  svg.addEventListener('pointerleave', leave);
+  svg.addEventListener('touchmove', move, { passive: true });
+  svg.addEventListener('touchend', leave);
+
+  // 圖例：兩條以上一定有，識別不能只靠顏色
+  $('#stresslegend').innerHTML = series.map(s =>
+    `<span><i style="border-top-color:${s.color}"></i>${s.m.k}× · 1R = ${s.m.r_dollar} U`
+    + ` · 谷底 ${fmt.n(s.m.dd_from_peak_pct, 1)}%</span>`).join('');
+}
+
+document.querySelectorAll('#stresstoggle button').forEach(b => {
+  b.addEventListener('click', () => {
+    stressView = b.dataset.v;
+    document.querySelectorAll('#stresstoggle button').forEach(x =>
+      x.setAttribute('aria-pressed', String(x.dataset.v === stressView)));
+    drawStress();
+  });
+});
+window.addEventListener('resize', () => { if (STRESS) drawStress(); });
+loadStress();
