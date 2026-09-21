@@ -243,11 +243,24 @@ function histogram(host, hist) {
 /* ------------------------------------------------------------------ */
 let DATA = null, curveMode = 1;   // 1 = 淨值, 2 = 累積 R
 
-// 雙軌。data.json 一定有（軌道 A）；data-csmom.json 只有雙軌模式才有。
-const TRACKS = [
-  { key: 'baseline', file: 'data.json',       name: 'A 基線' },
-  { key: 'csmom',    file: 'data-csmom.json', name: 'B 跨截面' },
-];
+// 多軌。data.json 一定有（軌道 A），它的 tracks 欄位說還有哪幾條。
+// 名字寫在這裡而不是後端，是為了讓手機端不必等新快照就能顯示新軌道。
+const TRACK_NAMES = {
+  baseline:    '基線',
+  csmom:       '跨截面',
+  trail_close: '鬆停損',
+};
+let TRACKS = [{ key: 'baseline', file: 'data.json', name: 'A 基線' }];
+
+function buildTracks(listed) {
+  const keys = ['baseline', ...(listed || []).filter(k => k !== 'baseline')];
+  TRACKS = keys.map((k, i) => ({
+    key: k,
+    file: k === 'baseline' ? 'data.json' : `data-${k}.json`,
+    name: `${String.fromCharCode(65 + i)} ${TRACK_NAMES[k] || k}`,
+  }));
+  return TRACKS;
+}
 const SNAP = {};                  // key -> snapshot
 let track = 'baseline';
 try { track = localStorage.getItem('track') || 'baseline'; } catch (e) {}
@@ -503,9 +516,9 @@ async function load(showSpin) {
   if (showSpin) btn.textContent = '…';
   try {
     // 先抓主軌，它會告訴我們還有哪些軌道；再去抓其餘的。
-    const first = await grab(TRACKS[0]);
+    const first = await grab({ key: 'baseline', file: 'data.json' });
     const listed = (first.ok && first.data.tracks) || ['baseline'];
-    const want = TRACKS.filter(t => t.key === 'baseline' || listed.includes(t.key));
+    const want = buildTracks(listed);
     const rest = await Promise.all(want.slice(1).map(grab));
     const got = [first, ...rest];
     let err = null;
@@ -594,25 +607,34 @@ document.addEventListener('DOMContentLoaded', () => {
 // --------------------------------------------------------------------
 function renderAB(ab) {
   const wrap = $('#abwrap');
-  const both = TRACKS.every(t => SNAP[t.key]);
-  if (!both && (!ab || !ab.tracks || !ab.tracks.length)) { wrap.hidden = true; return; }
+  const have = TRACKS.filter(t => SNAP[t.key]);
+  if (have.length < 2 && (!ab || !ab.tracks || ab.tracks.length < 2)) {
+    wrap.hidden = true; return;
+  }
   wrap.hidden = false;
 
-  const rows = both
-    ? TRACKS.map(t => ({ label: t.key, name: t.name, p: SNAP[t.key].portfolio }))
-    : ab.tracks.map(r => ({ label: r.label,
-        name: (TRACKS.find(t => t.key === r.label) || {}).name || r.label, p: r }));
+  const rows = have.length >= 2
+    ? have.map(t => ({ label: t.key, name: t.name,
+                       p: SNAP[t.key].portfolio,
+                       desc: (ab && (ab.tracks || []).find(r => r.label === t.key) || {}).desc }))
+    : ab.tracks.map(r => ({ label: r.label, name: r.label, p: r, desc: r.desc }));
 
+  const base = rows.find(r => r.label === 'baseline');
   let h = '<table class="tbl"><thead><tr><th>軌道</th><th>淨值</th><th>損益</th>'
-        + '<th>交易</th><th>持倉</th><th>期望值 R</th><th>累積 R</th></tr></thead><tbody>';
+        + '<th>交易</th><th>持倉</th><th>期望值 R</th><th>vs 基線</th></tr></thead><tbody>';
   for (const r of rows) {
     const p = r.p;
-    h += `<tr><td>${r.name}${r.label === track ? ' ←' : ''}</td>`
+    const d = (base && p.mean_r != null && base.p.mean_r != null)
+      ? p.mean_r - base.p.mean_r : null;
+    h += `<tr><td>${r.name}${r.label === track ? ' ←' : ''}`
+       + (r.desc ? `<div class="note" style="font-size:10.5px">${r.desc}</div>` : '')
+       + `</td>`
        + `<td>${fmt.n(p.equity, 2)}</td>`
        + `<td class="${cls(p.pnl)}">${fmt.sign(p.pnl, 2)}</td>`
        + `<td>${p.n_trades}</td><td>${p.open_count}</td>`
        + `<td>${p.mean_r == null ? '—' : fmt.sign(p.mean_r, 4)}</td>`
-       + `<td>${fmt.sign(p.total_r, 1)}</td></tr>`;
+       + `<td class="${r.label === 'baseline' ? '' : cls(d)}">`
+       + `${r.label === 'baseline' ? '—' : (d == null ? '—' : fmt.sign(d, 4))}</td></tr>`;
   }
   h += '</tbody></table>';
 
@@ -622,30 +644,24 @@ function renderAB(ab) {
     notes.push(`跨截面遮罩：${m.signals_before} → ${m.signals_after} 個訊號`
              + `（濾掉 ${fmt.n(m.drop_pct, 1)}%）`);
   }
-  const a = rows.find(r => r.label === 'baseline');
-  const b = rows.find(r => r.label === 'csmom');
-  if (a && b && a.p.mean_r != null && b.p.mean_r != null) {
-    notes.push(`μ(B) − μ(A) = ${fmt.sign(b.p.mean_r - a.p.mean_r, 4)} R`);
-    const least = Math.min(a.p.n_trades, b.p.n_trades);
-    notes.push(least < 2500
-      ? `要在 t=2 下判定 +0.08R 的差距，每軌需要約 2,500 筆；目前較少的一軌 ${least} 筆。`
-        + `<b>現在的差額還不能當結論。</b>`
-      : '樣本已達預先登記的判定門檻。');
-  } else {
-    notes.push('兩軌都還沒有平倉交易，期望值差額算不出來。');
-  }
+  const least = Math.min(...rows.map(r => r.p.n_trades));
+  notes.push(least === 0
+    ? '還沒有平倉交易，差額算不出來。'
+    : `樣本最少的一軌 ${least} 筆。`
+      + `<b>跨截面要 2,500 筆才判得動；鬆停損看的是次根出場率，不是這個差額。</b>`);
   h += `<div class="note" style="margin-top:8px">${notes.join('<br>')}</div>`;
   $('#ab').innerHTML = h;
 
-  if (both) dualCurve();
+  if (have.length >= 2) dualCurve();
 }
 
-/* 兩軌淨值疊圖。都換算成「相對起始資金的 %」，起始資金不同也比得了。
-   顏色不是唯一的訊息載體：A 實線、B 虛線，另外有圖例與上面那張表。 */
+/* 多軌淨值疊圖。都換算成「相對起始資金的 %」，起始資金不同也比得了。
+   顏色不是唯一的訊息載體：線型也不同（實線 / 虛線 / 點線），
+   另外有圖例與上面那張表。 */
 function dualCurve() {
   const host = $('#abcurve');
   if (!host) return;
-  const series = TRACKS.map(t => {
+  const series = TRACKS.filter(t => SNAP[t.key]).map(t => {
     const s = SNAP[t.key];
     const base = s.portfolio.initial_equity || 1;
     return { name: t.name,
@@ -684,17 +700,19 @@ function dualCurve() {
     svg.appendChild(mk('line', { x1: P.l, x2: W - P.r, y1: Y(0), y2: Y(0),
       stroke: css('--axis'), 'stroke-width': 1, 'stroke-dasharray': '3 3' }));
   }
-  const colors = [css('--series'), css('--series-b')];
+  const colors = [css('--series'), css('--series-b'), css('--series-c')];
+  const dashes = [null, '6 4', '2 3'];
   series.forEach((s, i) => {
     const d = s.pts.map((p, j) => (j ? 'L' : 'M') + X(p[0]).toFixed(2) + ' ' + Y(p[1]).toFixed(2)).join(' ');
-    svg.appendChild(mk('path', { d, fill: 'none', stroke: colors[i],
-      'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round',
-      ...(i ? { 'stroke-dasharray': '6 4' } : {}) }));
+    const attr = { d, fill: 'none', stroke: colors[i % colors.length],
+      'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' };
+    if (dashes[i % dashes.length]) attr['stroke-dasharray'] = dashes[i % dashes.length];
+    svg.appendChild(mk('path', attr));
   });
   host.innerHTML = '';
   const lg = el('div');
   lg.innerHTML = series.map((s, i) =>
-    `<span class="lgd"><i style="background:${colors[i]}"></i>${s.name}</span>`).join('');
+    `<span class="lgd"><i style="background:${colors[i % colors.length]}"></i>${s.name}</span>`).join('');
   host.appendChild(svg);
   host.appendChild(lg);
 }

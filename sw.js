@@ -6,7 +6,7 @@
    service worker 就把那個 401 快取起來反覆餵給畫面 ——
    使用者看到的是「網頁永遠不會更新」，而且沒有任何錯誤訊息。
    現在只有 r.ok 才進快取，失敗一律回上一份好的資料。 */
-const BUILD = 'c39bdff4820b';
+const BUILD = '9806c35af804';
 const SHELL = `shell-${BUILD}`;
 const DATA = 'data-v2';          /* v1 可能存了 401，改名強制丟掉 */
 const ASSETS = ['./', './index.html', './app.css', './app.js',
