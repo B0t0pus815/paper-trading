@@ -295,6 +295,19 @@ function render(data) {
       + `畫面上是 ${fmt.ago(data.generated_at)}的快取，不是現在的狀況。`;
     banner.appendChild(b);
   }
+  // 資金費率退回固定近似時一定要說。樣本內量過，固定 0.01% 會把邊緣
+  // 灌水 +0.0044 R（t 1.62 → 1.31）—— 悄悄退回等於在監控畫面上
+  // 留一個已知的樂觀偏差。
+  const fnd = s.funding;
+  if (fnd && (fnd.enabled === false || (fnd.fallback && fnd.fallback.length))) {
+    const b = el('div', 'banner');
+    b.textContent = fnd.enabled === false
+      ? '資金費率用的是固定 0.01%/8h 的近似 —— 樣本內量過，這會讓期望值偏樂觀約 +0.004R。'
+      : `${fnd.fallback.length} 個幣抓不到真實資金費率，退回固定 0.01%：`
+        + fnd.fallback.slice(0, 6).join('、')
+        + (fnd.fallback.length > 6 ? ' …' : '') + '。這部分偏樂觀。';
+    banner.appendChild(b);
+  }
   if (s.errors && s.errors.length) {
     const b = el('div', 'banner');
     b.textContent = '上次更新有錯誤：' + s.errors[s.errors.length - 1].split('\n')[0];
