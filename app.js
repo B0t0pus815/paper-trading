@@ -249,6 +249,7 @@ const TRACK_NAMES = {
   baseline:    '基線',
   csmom:       '跨截面',
   trail_close: '鬆停損',
+  trend_lo:    '趨勢LO',
 };
 let TRACKS = [{ key: 'baseline', file: 'data.json', name: 'A 基線' }];
 
@@ -588,7 +589,10 @@ function renderTrackBar() {
     seg.appendChild(b);
   }
   const s = SNAP[track];
-  $('#tracknote').textContent = s && s.config && s.config.cross
+  $('#tracknote').textContent = track === 'trend_lo'
+    ? `只做多的趨勢跟隨，依波動率配置權重，組合波動目標 ${((s && s.config && s.config.port_tv) || 0.25) * 100}%。`
+      + `1R = 起始資金 1%（${(s && s.config && s.config.r_unit) || 40}U），R 值不能跟 A–C 直接比`
+    : s && s.config && s.config.cross
     ? `Score=(close−close[${s.config.cross.lookback}])/ATR，每根每方向放行前 ${s.config.cross.top_k} 名`
     : '每個幣各自為政，沒有跨截面過濾';
 }
@@ -634,11 +638,13 @@ function renderAB(ab) {
 
   const base = rows.find(r => r.label === 'baseline');
   let h = '<table class="tbl"><thead><tr><th>軌道</th><th>淨值</th><th>損益</th>'
-        + '<th>交易</th><th>持倉</th><th>期望值 R</th><th>vs 基線</th></tr></thead><tbody>';
+        + '<th>交易</th><th>持倉</th><th>期望值 R</th><th>報酬 vs 基線</th></tr></thead><tbody>';
   for (const r of rows) {
     const p = r.p;
-    const d = (base && p.mean_r != null && base.p.mean_r != null)
-      ? p.mean_r - base.p.mean_r : null;
+    // 用報酬率差（百分點）比較：第四軌的 R 單位跟 A–C 不同，期望值 R 不能相減
+    const ret = q => q.return_pct != null ? q.return_pct
+      : (q.equity / (q.initial_equity || 4000) - 1) * 100;
+    const d = base ? ret(p) - ret(base.p) : null;
     h += `<tr><td>${r.name}${r.label === track ? ' ←' : ''}`
        + (r.desc ? `<div class="note" style="font-size:10.5px">${r.desc}</div>` : '')
        + `</td>`
@@ -647,7 +653,7 @@ function renderAB(ab) {
        + `<td>${p.n_trades}</td><td>${p.open_count}</td>`
        + `<td>${p.mean_r == null ? '—' : fmt.sign(p.mean_r, 4)}</td>`
        + `<td class="${r.label === 'baseline' ? '' : cls(d)}">`
-       + `${r.label === 'baseline' ? '—' : (d == null ? '—' : fmt.sign(d, 4))}</td></tr>`;
+       + `${r.label === 'baseline' ? '—' : (d == null ? '—' : fmt.sign(d, 2) + '%')}</td></tr>`;
   }
   h += '</tbody></table>';
 
@@ -713,8 +719,8 @@ function dualCurve() {
     svg.appendChild(mk('line', { x1: P.l, x2: W - P.r, y1: Y(0), y2: Y(0),
       stroke: css('--axis'), 'stroke-width': 1, 'stroke-dasharray': '3 3' }));
   }
-  const colors = [css('--series'), css('--series-b'), css('--series-c')];
-  const dashes = [null, '6 4', '2 3'];
+  const colors = [css('--series'), css('--series-b'), css('--series-c'), '#d97706'];
+  const dashes = [null, '6 4', '2 3', '10 3 2 3'];
   series.forEach((s, i) => {
     const d = s.pts.map((p, j) => (j ? 'L' : 'M') + X(p[0]).toFixed(2) + ' ' + Y(p[1]).toFixed(2)).join(' ');
     const attr = { d, fill: 'none', stroke: colors[i % colors.length],
