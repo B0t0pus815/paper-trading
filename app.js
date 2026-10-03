@@ -531,6 +531,8 @@ async function load(showSpin) {
   const btn = $('#refresh');
   if (showSpin) btn.textContent = '…';
   try {
+    // 每次載入都回到你最後點選的軌道（暫時退回 A 不會覆蓋這個選擇）
+    try { track = localStorage.getItem('track') || track; } catch (e) {}
     // 先抓主軌，它會告訴我們還有哪些軌道；再去抓其餘的。
     const first = await grab({ key: 'baseline', file: 'data.json' });
     const listed = (first.ok && first.data.tracks) || ['baseline'];
@@ -566,9 +568,20 @@ async function load(showSpin) {
         '。第一次開啟需要連線。</div>';
       return;
     }
-    if (!SNAP[track]) track = 'baseline';
+    // 以前這裡會「默默」切回 A 基線：你選的軌道這次沒抓到資料，畫面就換成
+    // A 的數字，看起來像未實現收益突然歸零、淨值掉到 4000 以下。
+    // 現在一樣退回 A，但一定在頂端寫清楚，而且不改你記住的選擇，下次有資料就自動回來。
+    let fellBack = null;
+    if (!SNAP[track]) { fellBack = track; track = 'baseline'; }
     renderTrackBar();
     render(SNAP[track]);
+    if (fellBack) {
+      const name = (TRACK_LETTER[fellBack] || '') + ' ' + (TRACK_NAMES[fellBack] || fellBack);
+      const b = el('div', 'banner err');
+      b.textContent = `你選的「${name}」這次沒有拿到資料，下面顯示的是 A 基線，不是 ${name} 的數字。`
+        + '通常是發佈中途或該軌程式剛重算，稍後按 ↻ 就會回來。';
+      $('#banner').prepend(b);
+    }
   } finally { btn.textContent = '↻'; }
 }
 
