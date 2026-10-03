@@ -719,7 +719,7 @@ function dualCurve() {
     svg.appendChild(mk('line', { x1: P.l, x2: W - P.r, y1: Y(0), y2: Y(0),
       stroke: css('--axis'), 'stroke-width': 1, 'stroke-dasharray': '3 3' }));
   }
-  const colors = [css('--series'), css('--series-b'), css('--series-c'), '#d97706'];
+  const colors = [css('--series'), css('--series-b'), css('--series-c'), '#0d9488'];
   const dashes = [null, '6 4', '2 3', '10 3 2 3'];
   series.forEach((s, i) => {
     const d = s.pts.map((p, j) => (j ? 'L' : 'M') + X(p[0]).toFixed(2) + ' ' + Y(p[1]).toFixed(2)).join(' ');
