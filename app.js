@@ -251,6 +251,8 @@ const TRACK_NAMES = {
   trail_close: '鬆停損',
   trend_lo:    '趨勢LO',
 };
+// 字母固定綁軌道：砍掉某一軌時，其他軌的代號不會跟著變
+const TRACK_LETTER = { baseline: 'A', csmom: 'B', trail_close: 'C', trend_lo: 'D' };
 let TRACKS = [{ key: 'baseline', file: 'data.json', name: 'A 基線' }];
 
 function buildTracks(listed) {
@@ -258,7 +260,7 @@ function buildTracks(listed) {
   TRACKS = keys.map((k, i) => ({
     key: k,
     file: k === 'baseline' ? 'data.json' : `data-${k}.json`,
-    name: `${String.fromCharCode(65 + i)} ${TRACK_NAMES[k] || k}`,
+    name: `${TRACK_LETTER[k] || String.fromCharCode(65 + i)} ${TRACK_NAMES[k] || k}`,
   }));
   return TRACKS;
 }
